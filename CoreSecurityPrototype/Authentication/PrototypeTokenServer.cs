@@ -1,97 +1,97 @@
 ﻿using AspNet.Security.OpenIdConnect.Extensions;
 using AspNet.Security.OpenIdConnect.Primitives;
 using AspNet.Security.OpenIdConnect.Server;
+using CoreSecurityPrototype.Data;
+using CoreSecurityPrototype.Data.Models;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Identity;
 using System;
 using System.Security.Claims;
 using System.Threading.Tasks;
 
 namespace CoreSecurityPrototype.Authentication
 {
-    public static class PrototypeTokenServer
+    public class AuthorizationProvider : OpenIdConnectServerProvider
     {
-        public static void Configure(OpenIdConnectServerOptions options)
-        {
-            options.TokenEndpointPath = "/connect/token";
-            options.AccessTokenLifetime = TimeSpan.FromHours(1);
-            options.RefreshTokenLifetime = null;
+        private readonly UserManager<ApplicationUser> _userManager;
 
-            options.Provider.OnHandleTokenRequest = HandleTokenRequest;
-            options.Provider.OnValidateTokenRequest = ValidateTokenRequest;
+        public AuthorizationProvider(UserManager<ApplicationUser> userManager)
+        {
+            _userManager = userManager;
         }
 
-
-        private static Task ValidateTokenRequest(ValidateTokenRequestContext context)
+        public override Task ValidateTokenRequest(ValidateTokenRequestContext context)
         {
             if (!context.Request.IsPasswordGrantType() && !context.Request.IsRefreshTokenGrantType())
             {
                 context.Reject(
                     error: OpenIdConnectConstants.Errors.UnsupportedGrantType,
-                    description: "Only grant_type=password and refresh_token " +
-                                 "requests are accepted by this server.");
+                    description: "Only the resource owner password credentials and refresh token " +
+                                 "grants are accepted by this authorization server.");
 
-                return Task.CompletedTask;
+                return Task.FromResult(0);
             }
 
-            if (string.Equals(context.ClientId, "prototype_client") &&
-                string.Equals(context.Request.Username, "Bob", StringComparison.Ordinal) &&
-                string.Equals(context.Request.Password, "Password123!"))
-            {
-                context.Validate();
-            }
+            context.Skip();
 
-            return Task.CompletedTask;
+            return Task.FromResult(0);
         }
 
-        private static Task HandleTokenRequest(HandleTokenRequestContext context)
+        public override async Task HandleTokenRequest(HandleTokenRequestContext context)
         {
             if (!context.Request.IsPasswordGrantType())
-                return Task.CompletedTask;
+                return;
 
-            if (!string.Equals(context.Request.Username, "Bob", StringComparison.Ordinal) ||
-                !string.Equals(context.Request.Password, "Password123!", StringComparison.Ordinal))
+            var username = context.Request.Username;
+            var password = context.Request.Password;
+
+            var user = await _userManager.FindByNameAsync(username);
+
+            if (user == null || await _userManager.CheckPasswordAsync(user, password))
             {
                 context.Reject(
                     error: OpenIdConnectConstants.Errors.InvalidGrant,
                     description: "Invalid user credentials."
                 );
 
-                return Task.CompletedTask;
+                return;
             }
 
             var identity = new ClaimsIdentity(
-                context.Scheme.Name,
+                OpenIdConnectServerDefaults.AuthenticationScheme,
                 OpenIdConnectConstants.Claims.Name,
                 OpenIdConnectConstants.Claims.Role
             );
 
-            var subjectClaim = new Claim(OpenIdConnectConstants.Claims.Subject, "[user_id]");
-
-            identity.AddClaim(subjectClaim);
-
-            var serializedDestinationClaim = new Claim(
-                "urn:customclaim",
-                "value",
+            identity.AddClaim(
+                OpenIdConnectConstants.Claims.Subject,
+                user.Id.ToString(),
                 OpenIdConnectConstants.Destinations.AccessToken,
                 OpenIdConnectConstants.Destinations.IdentityToken
             );
 
-            identity.AddClaim(serializedDestinationClaim);
+            identity.AddClaim(
+                OpenIdConnectConstants.Claims.Name,
+                user.UserName.ToString(),
+                OpenIdConnectConstants.Destinations.AccessToken,
+                OpenIdConnectConstants.Destinations.IdentityToken
+            );
 
             var ticket = new AuthenticationTicket(
                 new ClaimsPrincipal(identity),
                 new AuthenticationProperties(),
-                context.Scheme.Name
+                OpenIdConnectServerDefaults.AuthenticationScheme
             );
 
             ticket.SetScopes(
+                OpenIdConnectConstants.Scopes.OpenId,
                 OpenIdConnectConstants.Scopes.Profile,
                 OpenIdConnectConstants.Scopes.OfflineAccess
             );
 
             context.Validate(ticket);
 
-            return Task.CompletedTask;
+            return;
         }
     }
 }
