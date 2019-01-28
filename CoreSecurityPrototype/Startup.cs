@@ -1,16 +1,13 @@
-﻿using CoreSecurityPrototype.Authentication;
+﻿using AspNet.Security.OpenIdConnect.Primitives;
 using CoreSecurityPrototype.Data;
 using CoreSecurityPrototype.Data.Models;
 using CoreSecurityPrototype.Migrations;
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using System;
 
 namespace CoreSecurityPrototype
 {
@@ -25,29 +22,44 @@ namespace CoreSecurityPrototype
 
         public void ConfigureServices(IServiceCollection services)
         {
-            var connectionString = Configuration.GetConnectionString("CoreAuthPrototype");
+            services.AddCors();
+            services.AddMvc();
 
-            services.AddDbContext<AuthPrototypeContext>(options => options.UseSqlServer(connectionString));
+            services.AddDbContext<AuthPrototypeContext>(options => 
+            {
+                options.UseSqlServer(Configuration.GetConnectionString("CoreAuthPrototype"));
+                options.UseOpenIddict();
+            });
+
             services
                 .AddIdentity<ApplicationUser, IdentityRole>()
-                .AddEntityFrameworkStores<AuthPrototypeContext>();
+                .AddEntityFrameworkStores<AuthPrototypeContext>()
+                .AddDefaultTokenProviders();
 
-            services.AddScoped<AuthorizationProvider>();
-            
+            services.Configure<IdentityOptions>(options =>
+            {
+                options.ClaimsIdentity.UserIdClaimType = OpenIdConnectConstants.Claims.Subject;
+                options.ClaimsIdentity.UserNameClaimType = OpenIdConnectConstants.Claims.Name;
+                options.ClaimsIdentity.RoleClaimType = OpenIdConnectConstants.Claims.Role;
+            });
+
             services
-                .AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-                .AddOAuthValidation(OpenIdConnectDefaults.AuthenticationScheme)
-                .AddOpenIdConnectServer(options =>
+                .AddOpenIddict()
+                .AddCore(options =>
                 {
-                    options.TokenEndpointPath = "/connect/token";
-                    options.AccessTokenLifetime = TimeSpan.FromHours(1);
-                    options.RefreshTokenLifetime = null;
-                    options.ProviderType = typeof(AuthorizationProvider);
-                });
-
-            services
-                .AddMvc()
-                .SetCompatibilityVersion(CompatibilityVersion.Version_2_2);
+                    options
+                        .UseEntityFrameworkCore()
+                        .UseDbContext<AuthPrototypeContext>();
+                })
+                .AddServer(options =>
+                {
+                    options.UseMvc();
+                    options.EnableTokenEndpoint("/connect/token");
+                    options.AllowPasswordFlow();
+                    options.AcceptAnonymousClients();
+                    options.DisableScopeValidation();
+                })
+                .AddValidation();
         }
 
         public void Configure(
@@ -71,7 +83,8 @@ namespace CoreSecurityPrototype
             IdentityDataInitializer.SeedData(userManager, roleManager);
 
             app.UseAuthentication();
-            app.UseMvc();
+
+            app.UseMvcWithDefaultRoute();
         }
     }
 }
